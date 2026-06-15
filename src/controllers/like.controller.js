@@ -4,6 +4,7 @@ import mongoose, { isValidObjectId } from "mongoose";
 import { Like } from "../models/like.model.js";
 import { Video } from "../models/video.model.js";
 import { Comment } from "../models/comment.model.js";
+import { TweetComment } from "../models/tweetComment.model.js";
 import { Tweet } from "../models/tweet.model.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
@@ -71,14 +72,15 @@ const getLikedVideos = asyncHandler(async (req, res) => {
 });
 
 const toggleLike = asyncHandler(async (req, res) => {
-  const { toggleLike, commentId, videoId, tweetId } = req.query;
+  const { toggleLike, commentId, videoId, tweetId, tweetCommentId } = req.query;
 
   let reqLike;
 
   if (
     !isValidObjectId(commentId) &&
     !isValidObjectId(tweetId) &&
-    !isValidObjectId(videoId)
+    !isValidObjectId(videoId) &&
+    !isValidObjectId(tweetCommentId)
   )
     throw new APIError(400, "Invalid id");
 
@@ -110,6 +112,14 @@ const toggleLike = asyncHandler(async (req, res) => {
 
     userLike = await Like.find({
       tweet: tweetId,
+      likedBy: req.user?._id,
+    });
+  } else if (tweetCommentId) {
+    const tweetComment = await TweetComment.findById(tweetCommentId);
+    if (!tweetComment) throw new APIError(400, "No tweet comment found");
+
+    userLike = await Like.find({
+      tweetComment: tweetCommentId,
       likedBy: req.user?._id,
     });
   }
@@ -171,6 +181,12 @@ const toggleLike = asyncHandler(async (req, res) => {
         likedBy: req.user?._id,
         liked: reqLike,
       });
+    } else if (tweetCommentId) {
+      like = await Like.create({
+        tweetComment: tweetCommentId,
+        likedBy: req.user?._id,
+        liked: reqLike,
+      });
     }
     if (!like) throw new APIError(500, "error while toggling like");
     isLiked = reqLike;
@@ -188,6 +204,9 @@ const toggleLike = asyncHandler(async (req, res) => {
   } else if (tweetId) {
     totalLikes = await Like.find({ tweet: tweetId, liked: true });
     totalDisLikes = await Like.find({ tweet: tweetId, liked: false });
+  } else if (tweetCommentId) {
+    totalLikes = await Like.find({ tweetComment: tweetCommentId, liked: true });
+    totalDisLikes = await Like.find({ tweetComment: tweetCommentId, liked: false });
   }
 
   return res.status(200).json(

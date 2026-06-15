@@ -12,6 +12,7 @@ import {
   getUserChannelProfile,
   getWatchHistory,
   clearWatchHistory,
+  searchUsers,
 } from "../controllers/user.controller.js";
 import { upload } from "../middlewares/multer.middleware.js";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
@@ -47,6 +48,7 @@ router
   .patch(verifyJWT, upload.single("coverImage"), updateUserCoverImage);
 
 router.route("/get-current-user").get(verifyJWT, getCurrentUser);
+router.route("/search").get(verifyJWT, searchUsers);
 router.route("/c/:username").get(checkUser, getUserChannelProfile);
 router
   .route("/history")

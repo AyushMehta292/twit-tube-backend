@@ -1,3 +1,4 @@
-import { app } from "../app.js";
+import "dotenv/config";
+import app from "../src/app.js";
+
 export default app;
-console.log("Project by Ayush Mehta");

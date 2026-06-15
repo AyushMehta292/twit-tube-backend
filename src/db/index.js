@@ -1,37 +1,42 @@
-import { DB_NAME } from "../constants.js";
 import mongoose from "mongoose";
+import { DB_NAME } from "../constants.js";
 
-async function connectToDatabase() {
+/** Reuse connection across Vercel serverless invocations (warm instances). */
+let cached = globalThis.__mongooseTwitTubeCache;
+
+if (!cached) {
+  cached = globalThis.__mongooseTwitTubeCache = { promise: null };
+}
+
+export async function connectDB() {
+  const baseUrl = process.env.MONGODB_URL;
+  if (!baseUrl) {
+    throw new Error("MONGODB_URL is not defined");
+  }
+
+  const uri = `${baseUrl.replace(/\/$/, "")}/${DB_NAME}`;
+
+  if (mongoose.connection.readyState === 1) {
+    return mongoose;
+  }
+
+  if (!cached.promise) {
+    cached.promise = mongoose.connect(uri, {
+      bufferCommands: false,
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 15000,
+    });
+  }
+
   try {
-    const connectionInstance = await mongoose.connect(
-      `${process.env.MONGODB_URL}/${DB_NAME}`
-    );
-    console.log(
-      `MONGODB Connected!! DB Host : ${connectionInstance?.connection.host}`
-    );
+    await cached.promise;
+    return mongoose;
   } catch (err) {
-    console.log("MONGODB CONNECTION FAILED :: ", err);
-    process.exit(1);
+    cached.promise = null;
+    console.error("MongoDB connection error:", err.message);
+    throw err;
   }
 }
 
-export default connectToDatabase;
-
-// async function connectToDatabase() {
-//   try {
-//     const connectionInstance = await mongoose.connect(
-//       `${process.env.DATABASE_URL}/${DB_NAME}`
-//     );
-
-//     console.log(
-//       `MONGODB Connected!! DB Host : ${connectionInstance.connection.host}\n${connectionInstance}`
-//     );
-
-//     app.listen(process.env.PORT, () => {
-//       console.log("Server is running on Port ", process.env.PORT);
-//     });
-//   } catch (err) {
-//     console.log("MONGODB CONNECTION FAILED :: ", err);
-//     process.exit(1);
-//   }
-// }
+/** Local dev entry — connect once before app.listen */
+export default connectDB;

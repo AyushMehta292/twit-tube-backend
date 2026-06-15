@@ -662,6 +662,28 @@ const clearWatchHistory = asyncHandler(async (req, res) => {
     .json(new APIResponse(200, [], "History Cleared Successfully"));
 });
 
+const searchUsers = asyncHandler(async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  if (!q || q.length < 3) {
+    return res.status(200).json(new APIResponse(200, [], "Users fetched"));
+  }
+
+  const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  const filter = {
+    $or: [{ username: regex }, { fullName: regex }],
+  };
+  if (req.user?._id) {
+    filter._id = { $ne: req.user._id };
+  }
+
+  const users = await User.find(filter)
+    .select("username fullName avatar")
+    .limit(10)
+    .lean();
+
+  return res.status(200).json(new APIResponse(200, users, "Users fetched"));
+});
+
 export {
   registerUser,
   loginUser,
@@ -675,4 +697,5 @@ export {
   getUserChannelProfile,
   getWatchHistory,
   clearWatchHistory,
+  searchUsers,
 };

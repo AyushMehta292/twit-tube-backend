@@ -1,13 +1,15 @@
-import connectToDatabase from "./db/index.js";
+import connectDB from "./db/index.js";
 import { app } from "./app.js";
 
+const PORT = process.env.PORT || 8000;
 
-connectToDatabase()
+connectDB()
   .then(() => {
-    app.listen(process.env.PORT || 4000, () => {
-      console.log("⚙️  Server is running on Port :", process.env.PORT);
+    app.listen(PORT, () => {
+      console.log("⚙️  Server is running on Port:", PORT);
     });
   })
   .catch((err) => {
-    console.log("MONGODB CONNECTION FAILED!!! ", err);
+    console.error("MONGODB CONNECTION FAILED:", err.message);
+    process.exit(1);
   });

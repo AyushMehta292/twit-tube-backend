@@ -1,34 +1,51 @@
 import { Tweet } from "../models/tweet.model.js";
+import { TweetComment } from "../models/tweetComment.model.js";
 import { Like } from "../models/like.model.js";
+import { Video } from "../models/video.model.js";
 import { Subscription } from "../models/subscription.model.js";
 import mongoose, { isValidObjectId } from "mongoose";
 import { APIError } from "../utils/APIError.js";
 import { APIResponse } from "../utils/APIResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { buildTweetAggregationPipeline } from "../utils/tweetAggregate.js";
+import {
+  validateTweetContent,
+  validateTweetTags,
+} from "../utils/tweetValidation.js";
 
-// TODO: Review and Enhance all controllers
+const assertTweetOwner = async (tweetId, userId) => {
+  const tweet = await Tweet.findById(tweetId);
+  if (!tweet) throw new APIError(404, "Tweet not found");
+  if (tweet.owner.toString() !== userId.toString()) {
+    throw new APIError(403, "Only the tweet owner can perform this action");
+  }
+  return tweet;
+};
 
 const createTweet = asyncHandler(async (req, res) => {
-  const { tweet } = req.body;
+  const { content, taggedUsers, taggedVideos } = req.body;
 
-  if (!tweet) throw new APIError(400, "Tweet content required");
+  const trimmedContent = validateTweetContent(content);
+  const { userIds, videoIds } = await validateTweetTags({
+    ownerId: req.user._id,
+    taggedUsers,
+    taggedVideos,
+  });
 
-  const tweetRes = await Tweet.create({ content: tweet, owner: req.user?._id });
+  const tweetRes = await Tweet.create({
+    content: trimmedContent,
+    owner: req.user._id,
+    taggedUsers: userIds,
+    taggedVideos: videoIds,
+  });
 
-  if (!tweetRes) throw new APIError(500, "Error occured while creating tweet");
-
-  let newTweet = {
-    ...tweetRes._doc,
-    owner: {
-      fullName: req.user?.fullName,
-      username: req.user?.username,
-      avatar: req.user?.avatar,
-    },
-    totalDisLikes: 0,
-    totalLikes: 0,
-    isLiked: false,
-    isDisLiked: false,
-  };
+  const [newTweet] = await Tweet.aggregate(
+    buildTweetAggregationPipeline({
+      match: { _id: tweetRes._id },
+      userId: req.user._id,
+      includeIsOwner: true,
+    })
+  );
 
   return res
     .status(200)
@@ -41,138 +58,12 @@ const getUserTweets = asyncHandler(async (req, res) => {
   if (!isValidObjectId(userId))
     throw new APIError(400, "Invalid userId: " + userId);
 
-  const allTweets = await Tweet.aggregate([
-    {
-      $match: {
-        owner: new mongoose.Types.ObjectId(userId),
-      },
-    },
-    // sort by latest
-    {
-      $sort: {
-        createdAt: -1,
-      },
-    },
-    // fetch likes of tweet
-    {
-      $lookup: {
-        from: "likes",
-        localField: "_id",
-        foreignField: "tweet",
-        as: "likes",
-        pipeline: [
-          {
-            $match: {
-              liked: true,
-            },
-          },
-          {
-            $group: {
-              _id: "liked",
-              owners: { $push: "$likedBy" },
-            },
-          },
-        ],
-      },
-    },
-    {
-      $lookup: {
-        from: "likes",
-        localField: "_id",
-        foreignField: "tweet",
-        as: "dislikes",
-        pipeline: [
-          {
-            $match: {
-              liked: false,
-            },
-          },
-          {
-            $group: {
-              _id: "liked",
-              owners: { $push: "$likedBy" },
-            },
-          },
-        ],
-      },
-    },
-    // Reshape Likes and dislikes
-    {
-      $addFields: {
-        likes: {
-          $cond: {
-            if: {
-              $gt: [{ $size: "$likes" }, 0],
-            },
-            then: { $first: "$likes.owners" },
-            else: [],
-          },
-        },
-        dislikes: {
-          $cond: {
-            if: {
-              $gt: [{ $size: "$dislikes" }, 0],
-            },
-            then: { $first: "$dislikes.owners" },
-            else: [],
-          },
-        },
-      },
-    },
-    // get owner details
-    {
-      $lookup: {
-        from: "users",
-        localField: "owner",
-        foreignField: "_id",
-        as: "owner",
-        pipeline: [
-          {
-            $project: {
-              username: 1,
-              avatar: 1,
-              fullName: 1,
-            },
-          },
-        ],
-      },
-    },
-    {
-      $unwind: "$owner",
-    },
-    {
-      $project: {
-        content: 1,
-        createdAt: 1,
-        updatedAt: 1,
-        owner: 1,
-        totalLikes: {
-          $size: "$likes",
-        },
-        totalDisLikes: {
-          $size: "$dislikes",
-        },
-        isLiked: {
-          $cond: {
-            if: {
-              $in: [req.user?._id, "$likes"],
-            },
-            then: true,
-            else: false,
-          },
-        },
-        isDisLiked: {
-          $cond: {
-            if: {
-              $in: [req.user?._id, "$dislikes"],
-            },
-            then: true,
-            else: false,
-          },
-        },
-      },
-    },
-  ]);
+  const allTweets = await Tweet.aggregate(
+    buildTweetAggregationPipeline({
+      match: { owner: new mongoose.Types.ObjectId(userId) },
+      userId: req.user?._id,
+    })
+  );
 
   return res
     .status(200)
@@ -180,292 +71,71 @@ const getUserTweets = asyncHandler(async (req, res) => {
 });
 
 const getAllTweets = asyncHandler(async (req, res) => {
-  const allTweets = await Tweet.aggregate([
-    // sort by latest
-    {
-      $sort: {
-        createdAt: -1,
-      },
-    },
-    // fetch likes of tweet
-    {
-      $lookup: {
-        from: "likes",
-        localField: "_id",
-        foreignField: "tweet",
-        as: "likes",
-        pipeline: [
-          {
-            $match: {
-              liked: true,
-            },
-          },
-          {
-            $group: {
-              _id: "liked",
-              owners: { $push: "$likedBy" },
-            },
-          },
-        ],
-      },
-    },
-    {
-      $lookup: {
-        from: "likes",
-        localField: "_id",
-        foreignField: "tweet",
-        as: "dislikes",
-        pipeline: [
-          {
-            $match: {
-              liked: false,
-            },
-          },
-          {
-            $group: {
-              _id: "liked",
-              owners: { $push: "$likedBy" },
-            },
-          },
-        ],
-      },
-    },
-    // Reshape Likes and dislikes
-    {
-      $addFields: {
-        likes: {
-          $cond: {
-            if: {
-              $gt: [{ $size: "$likes" }, 0],
-            },
-            then: { $first: "$likes.owners" },
-            else: [],
-          },
-        },
-        dislikes: {
-          $cond: {
-            if: {
-              $gt: [{ $size: "$dislikes" }, 0],
-            },
-            then: { $first: "$dislikes.owners" },
-            else: [],
-          },
-        },
-      },
-    },
-    // get owner details
-    {
-      $lookup: {
-        from: "users",
-        localField: "owner",
-        foreignField: "_id",
-        as: "owner",
-        pipeline: [
-          {
-            $project: {
-              username: 1,
-              avatar: 1,
-              fullName: 1,
-            },
-          },
-        ],
-      },
-    },
-    {
-      $unwind: "$owner",
-    },
-    {
-      $project: {
-        content: 1,
-        createdAt: 1,
-        updatedAt: 1,
-        owner: 1,
-        isOwner: {
-          $cond: {
-            if: { $eq: [req.user?._id, "$owner._id"] },
-            then: true,
-            else: false,
-          },
-        },
-        totalLikes: {
-          $size: "$likes",
-        },
-        totalDisLikes: {
-          $size: "$dislikes",
-        },
-        isLiked: {
-          $cond: {
-            if: {
-              $in: [req.user?._id, "$likes"],
-            },
-            then: true,
-            else: false,
-          },
-        },
-        isDisLiked: {
-          $cond: {
-            if: {
-              $in: [req.user?._id, "$dislikes"],
-            },
-            then: true,
-            else: false,
-          },
-        },
-      },
-    },
-  ]);
+  const allTweets = await Tweet.aggregate(
+    buildTweetAggregationPipeline({
+      userId: req.user?._id,
+      includeIsOwner: true,
+    })
+  );
 
   return res
     .status(200)
     .json(new APIResponse(200, allTweets, "all tweets send successfully"));
 });
 
+const getRelevantTweets = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const userVideoIds = await Video.find({ owner: userId, isPublished: true }).distinct("_id");
+
+  const allTweets = await Tweet.aggregate(
+    buildTweetAggregationPipeline({
+      match: {
+        $or: [
+          { owner: userId },
+          { taggedUsers: userId },
+          { taggedVideos: { $in: userVideoIds } },
+        ],
+      },
+      userId: userId.toString(),
+      includeIsOwner: true,
+    })
+  );
+
+  return res
+    .status(200)
+    .json(new APIResponse(200, allTweets, "relevant tweets sent successfully"));
+});
+
+const getTweetById = asyncHandler(async (req, res) => {
+  const { tweetId } = req.params;
+  if (!isValidObjectId(tweetId)) throw new APIError(400, "Invalid tweetId");
+
+  const tweets = await Tweet.aggregate(
+    buildTweetAggregationPipeline({
+      match: { _id: new mongoose.Types.ObjectId(tweetId) },
+      userId: req.user?._id,
+      includeIsOwner: true,
+    })
+  );
+
+  if (!tweets.length) throw new APIError(404, "Tweet not found");
+
+  return res
+    .status(200)
+    .json(new APIResponse(200, tweets[0], "tweet fetched successfully"));
+});
+
 const getAllUserFeedTweets = asyncHandler(async (req, res) => {
   const subscriptions = await Subscription.find({ subscriber: req.user?._id });
-
   const subscribedChannels = subscriptions.map((item) => item.channel);
 
-  const allTweets = await Tweet.aggregate([
-    {
-      $match: {
-        owner: {
-          $in: subscribedChannels,
-        },
-      },
-    },
-    // sort by latest
-    {
-      $sort: {
-        createdAt: -1,
-      },
-    },
-    // fetch likes of tweet
-    {
-      $lookup: {
-        from: "likes",
-        localField: "_id",
-        foreignField: "tweet",
-        as: "likes",
-        pipeline: [
-          {
-            $match: {
-              liked: true,
-            },
-          },
-          {
-            $group: {
-              _id: "liked",
-              owners: { $push: "$likedBy" },
-            },
-          },
-        ],
-      },
-    },
-    {
-      $lookup: {
-        from: "likes",
-        localField: "_id",
-        foreignField: "tweet",
-        as: "dislikes",
-        pipeline: [
-          {
-            $match: {
-              liked: false,
-            },
-          },
-          {
-            $group: {
-              _id: "liked",
-              owners: { $push: "$likedBy" },
-            },
-          },
-        ],
-      },
-    },
-    // Reshape Likes and dislikes
-    {
-      $addFields: {
-        likes: {
-          $cond: {
-            if: {
-              $gt: [{ $size: "$likes" }, 0],
-            },
-            then: { $first: "$likes.owners" },
-            else: [],
-          },
-        },
-        dislikes: {
-          $cond: {
-            if: {
-              $gt: [{ $size: "$dislikes" }, 0],
-            },
-            then: { $first: "$dislikes.owners" },
-            else: [],
-          },
-        },
-      },
-    },
-    // get owner details
-    {
-      $lookup: {
-        from: "users",
-        localField: "owner",
-        foreignField: "_id",
-        as: "owner",
-        pipeline: [
-          {
-            $project: {
-              username: 1,
-              avatar: 1,
-              fullName: 1,
-            },
-          },
-        ],
-      },
-    },
-    {
-      $unwind: "$owner",
-    },
-    {
-      $project: {
-        content: 1,
-        createdAt: 1,
-        updatedAt: 1,
-        owner: 1,
-        isOwner: {
-          $cond: {
-            if: { $eq: [req.user?._id, "$owner._id"] },
-            then: true,
-            else: false,
-          },
-        },
-        totalLikes: {
-          $size: "$likes",
-        },
-        totalDisLikes: {
-          $size: "$dislikes",
-        },
-        isLiked: {
-          $cond: {
-            if: {
-              $in: [req.user?._id, "$likes"],
-            },
-            then: true,
-            else: false,
-          },
-        },
-        isDisLiked: {
-          $cond: {
-            if: {
-              $in: [req.user?._id, "$dislikes"],
-            },
-            then: true,
-            else: false,
-          },
-        },
-      },
-    },
-  ]);
+  const allTweets = await Tweet.aggregate(
+    buildTweetAggregationPipeline({
+      match: { owner: { $in: subscribedChannels } },
+      userId: req.user?._id,
+      includeIsOwner: true,
+    })
+  );
 
   return res
     .status(200)
@@ -474,21 +144,23 @@ const getAllUserFeedTweets = asyncHandler(async (req, res) => {
 
 const updateTweet = asyncHandler(async (req, res) => {
   const { tweetId } = req.params;
-  const { tweet } = req.body;
-  if (!isValidObjectId(tweetId)) throw new APIError(400, "Invalid tweetId");
-  if (!tweet) throw new APIError(400, "tweet content required");
+  const content = req.body.content ?? req.body.tweet;
 
-  const updatedTweet = await Tweet.findByIdAndUpdate(
-    tweetId,
-    {
-      $set: {
-        content: tweet,
-      },
-    },
-    {
-      new: true,
-    }
+  if (!isValidObjectId(tweetId)) throw new APIError(400, "Invalid tweetId");
+  await assertTweetOwner(tweetId, req.user._id);
+
+  const trimmedContent = validateTweetContent(content);
+
+  await Tweet.findByIdAndUpdate(tweetId, { $set: { content: trimmedContent } });
+
+  const [updatedTweet] = await Tweet.aggregate(
+    buildTweetAggregationPipeline({
+      match: { _id: new mongoose.Types.ObjectId(tweetId) },
+      userId: req.user._id,
+      includeIsOwner: true,
+    })
   );
+
   return res
     .status(200)
     .json(new APIResponse(200, updatedTweet, "tweet updated successfully"));
@@ -499,17 +171,23 @@ const deleteTweet = asyncHandler(async (req, res) => {
 
   if (!isValidObjectId(tweetId)) throw new APIError(400, "Invalid tweetId");
 
-  const findRes = await Tweet.findByIdAndDelete(tweetId);
+  const tweet = await assertTweetOwner(tweetId, req.user._id);
 
-  if (!findRes) throw new APIError(500, "tweet not found");
+  const comments = await TweetComment.find({ tweet: tweetId }).select("_id");
+  const commentIds = comments.map((c) => c._id);
 
-  const deleteLikes = await Like.deleteMany({
-    tweet: new mongoose.Types.ObjectId(tweetId),
+  await Like.deleteMany({
+    $or: [
+      { tweet: tweetId },
+      { tweetComment: { $in: commentIds } },
+    ],
   });
+  await TweetComment.deleteMany({ tweet: tweetId });
+  await Tweet.findByIdAndDelete(tweetId);
 
   return res
     .status(200)
-    .json(new APIResponse(200, findRes, "tweet deleted successfully"));
+    .json(new APIResponse(200, tweet, "tweet deleted successfully"));
 });
 
 export {
@@ -519,4 +197,6 @@ export {
   deleteTweet,
   getAllTweets,
   getAllUserFeedTweets,
+  getRelevantTweets,
+  getTweetById,
 };
