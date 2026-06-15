@@ -100,9 +100,60 @@ const deleteVideoOnCloudinary = async (URL) => {
   }
 };
 
+const UPLOAD_FOLDERS = {
+  video: "videotube/videos",
+  image: "videotube/photos",
+};
+
+const getSignedUploadParams = (resourceType) => {
+  const folder = UPLOAD_FOLDERS[resourceType];
+  if (!folder) return null;
+
+  const timestamp = Math.round(Date.now() / 1000);
+  const paramsToSign = {
+    timestamp,
+    folder,
+    resource_type: resourceType,
+  };
+
+  const signature = cloudinary.utils.api_sign_request(
+    paramsToSign,
+    process.env.CLOUDINARY_API_SECRET
+  );
+
+  return {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+    apiKey: process.env.CLOUDINARY_API_KEY,
+    timestamp,
+    signature,
+    folder,
+    resourceType,
+  };
+};
+
+const isValidCloudinaryAssetUrl = (url, resourceType) => {
+  if (!url || typeof url !== "string") return false;
+
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  const folder = UPLOAD_FOLDERS[resourceType];
+  if (!cloudName || !folder) return false;
+
+  const uploadSegment = resourceType === "video" ? "video" : "image";
+  const escapedCloud = cloudName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedFolder = folder.replace(/\//g, "\\/");
+
+  const pattern = new RegExp(
+    `^https://res\\.cloudinary\\.com/${escapedCloud}/${uploadSegment}/upload/v\\d+/${escapedFolder}/.+$`
+  );
+
+  return pattern.test(url);
+};
+
 export {
   uploadPhotoOnCloudinary,
   uploadVideoOnCloudinary,
   deleteImageOnCloudinary,
   deleteVideoOnCloudinary,
+  getSignedUploadParams,
+  isValidCloudinaryAssetUrl,
 };
