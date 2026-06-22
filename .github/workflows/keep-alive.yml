@@ -1,0 +1,28 @@
+name: Keep alive
+
+on:
+  schedule:
+    # Every 10 minutes (UTC)
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping health endpoint
+        run: |
+          url="${{ secrets.KEEP_ALIVE_URL }}"
+          if [ -z "$url" ]; then
+            echo "KEEP_ALIVE_URL secret is not set"
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/health.json -w "%{http_code}" --max-time 60 "$url")
+          cat /tmp/health.json
+          echo ""
+          echo "HTTP $code"
+          if [ "$code" != "200" ]; then
+            exit 1
+          fi
+          grep -q '"db":"connected"' /tmp/health.json || grep -q '"db":"skipped"' /tmp/health.json
