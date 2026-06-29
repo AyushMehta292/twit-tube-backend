@@ -110,10 +110,11 @@ const getSignedUploadParams = (resourceType) => {
   if (!folder) return null;
 
   const timestamp = Math.round(Date.now() / 1000);
+  // resource_type is set by the upload URL (/video/upload or /image/upload)
+  // and must not be included in the signature string.
   const paramsToSign = {
     timestamp,
     folder,
-    resource_type: resourceType,
   };
 
   const signature = cloudinary.utils.api_sign_request(
